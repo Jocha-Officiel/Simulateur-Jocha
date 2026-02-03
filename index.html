@@ -2,21 +2,19 @@
 <html lang="fr">
 <head>
     <meta charset="UTF-8">
-    <title>Jochua Simulator | Precision Edition</title>
+    <title>Jochua Simulator | Horizon Edition</title>
     <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@700;900&display=swap" rel="stylesheet">
     <style>
-        body { margin: 0; overflow: hidden; background: #ffffff; font-family: 'Orbitron', sans-serif; }
+        body { margin: 0; overflow: hidden; background: #87CEEB; font-family: 'Orbitron', sans-serif; }
         #hud { 
             position: absolute; top: 30px; left: 30px; 
-            color: #000; border-left: 6px solid #000; padding-left: 20px;
-            pointer-events: none; z-index: 10;
+            color: #fff; border-left: 6px solid #fff; padding-left: 20px;
+            text-shadow: 2px 2px 4px rgba(0,0,0,0.5); pointer-events: none; z-index: 10;
         }
         .stat { font-size: 56px; font-weight: 900; line-height: 0.9; }
-        .label { font-size: 14px; opacity: 0.6; letter-spacing: 5px; text-transform: uppercase; margin-bottom: 5px; }
-        #flash {
-            position: absolute; inset: 0; background: red; opacity: 0;
-            pointer-events: none; z-index: 20; transition: opacity 0.1s;
-        }
+        .label { font-size: 14px; opacity: 0.8; letter-spacing: 5px; text-transform: uppercase; margin-bottom: 5px; }
+        #flash { position: absolute; inset: 0; background: red; opacity: 0; pointer-events: none; z-index: 20; transition: opacity 0.1s; }
+        #controls { position: absolute; bottom: 20px; left: 30px; color: white; font-size: 12px; opacity: 0.7; }
     </style>
 </head>
 <body>
@@ -25,6 +23,7 @@
         <div class="label">Jochua Simulator</div>
         <div class="stat"><span id="speed-val">0</span> <small style="font-size: 20px;">KM/H</small></div>
     </div>
+    <div id="controls">Z: Avancer | S: Reculer | Q/D: Tourner | L: Phares</div>
 
     <script type="importmap">
         { "imports": { "three": "https://unpkg.com/three@0.160.0/build/three.module.js" } }
@@ -33,70 +32,84 @@
     <script type="module">
         import * as THREE from 'three';
 
-        let scene, camera, renderer, car, grid, wheels = [];
-        let obstacles = [];
-        let speed = 0, angle = 0;
+        let scene, camera, renderer, car, worldGroup, wheels = [];
+        let obstacles = [], smokeParticles = [], headlights = [];
+        let speed = 0, angle = 0, lightsOn = false;
         const keys = {};
 
-        // --- NOUVELLE PHYSIQUE (30 SECONDES) ---
-        const MAX_SPEED_UNIT_FWD = 1.4; // = 250 km/h
-        const MAX_SPEED_UNIT_BWD = 0.7; // = 125 km/h (Augmenté)
-
-        // 30 secondes = 1800 frames (à 60 FPS)
+        const MAX_SPEED_UNIT_FWD = 1.4; 
+        const MAX_SPEED_UNIT_BWD = 0.7; 
         const ACCEL_FWD = MAX_SPEED_UNIT_FWD / 1800; 
         const ACCEL_BWD = MAX_SPEED_UNIT_BWD / 1800; 
-        
-        const FRICTION = 0.0015; 
+        const FRICTION = 0.0015;
 
         function init() {
             scene = new THREE.Scene();
-            scene.background = new THREE.Color(0xffffff);
-            scene.fog = new THREE.Fog(0xffffff, 5, 85);
+            scene.background = new THREE.Color(0x87CEEB); // Ciel bleu
+            scene.fog = new THREE.Fog(0x87CEEB, 20, 100);
 
-            camera = new THREE.PerspectiveCamera(65, window.innerWidth / window.innerHeight, 0.1, 1000);
-            camera.position.set(0, 3.5, 9);
+            camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 1000);
+            camera.position.set(0, 3, 8);
 
             renderer = new THREE.WebGLRenderer({ antialias: true });
             renderer.setSize(window.innerWidth, window.innerHeight);
             renderer.setPixelRatio(window.devicePixelRatio);
             document.body.appendChild(renderer.domElement);
 
-            const ambient = new THREE.AmbientLight(0xffffff, 0.8);
+            const ambient = new THREE.AmbientLight(0xffffff, 0.6);
+            scene.add(ambient);
             const sun = new THREE.DirectionalLight(0xffffff, 1.2);
-            sun.position.set(5, 15, 10);
-            scene.add(ambient, sun);
+            sun.position.set(50, 100, 50);
+            scene.add(sun);
 
-            // --- DESIGN JOCHUA ULTIME ---
+            worldGroup = new THREE.Group();
+            scene.add(worldGroup);
+
+            // --- LA ROUTE & PAYSAGE ---
+            const roadGeo = new THREE.PlaneGeometry(20, 2000);
+            const roadMat = new THREE.MeshStandardMaterial({ color: 0x333333 });
+            const road = new THREE.Mesh(roadGeo, roadMat);
+            road.rotation.x = -Math.PI / 2;
+            worldGroup.add(road);
+
+            // Lignes de route
+            for(let i = 0; i < 100; i++) {
+                const line = new THREE.Mesh(new THREE.PlaneGeometry(0.2, 5), new THREE.MeshBasicMaterial({color: 0xffffff}));
+                line.rotation.x = -Math.PI / 2;
+                line.position.set(0, 0.01, -i * 20);
+                worldGroup.add(line);
+            }
+
+            // Herbe
+            const grass = new THREE.Mesh(new THREE.PlaneGeometry(1000, 2000), new THREE.MeshStandardMaterial({color: 0x228B22}));
+            grass.rotation.x = -Math.PI / 2;
+            grass.position.y = -0.1;
+            worldGroup.add(grass);
+
+            // --- LA JOCHUA DÉTAILLÉE ---
             car = new THREE.Group();
             const paintMat = new THREE.MeshStandardMaterial({ color: 0x050505, metalness: 0.9, roughness: 0.1 });
-            const carbonMat = new THREE.MeshStandardMaterial({ color: 0x111111, metalness: 0.5, roughness: 0.5 });
-            const glassMat = new THREE.MeshStandardMaterial({ color: 0x000000, metalness: 1, roughness: 0 });
+            const carBody = new THREE.Mesh(new THREE.BoxGeometry(2.1, 0.6, 4.4), paintMat);
+            car.add(carBody);
+            
+            // Phares (Physiques)
+            const lightL = new THREE.SpotLight(0xffffcc, 0, 40, Math.PI/6, 0.5);
+            lightL.position.set(0.8, 0.2, -2.2);
+            const lightR = lightL.clone();
+            lightR.position.x = -0.8;
+            car.add(lightL, lightR, lightL.target, lightR.target);
+            lightL.target.position.set(0.8, 0, -10);
+            lightR.target.position.set(-0.8, 0, -10);
+            headlights = [lightL, lightR];
 
-            const body = new THREE.Mesh(new THREE.BoxGeometry(2.1, 0.6, 4.4), paintMat);
-            car.add(body);
-            const roof = new THREE.Mesh(new THREE.BoxGeometry(1.4, 0.45, 2.2), glassMat);
-            roof.position.set(0, 0.5, 0.2);
-            car.add(roof);
+            const wing = new THREE.Mesh(new THREE.BoxGeometry(2.4, 0.05, 0.5), paintMat);
+            wing.position.set(0, 0.6, 2.1);
+            car.add(wing);
 
-            // Calandre & Feux
-            const grill = new THREE.Mesh(new THREE.BoxGeometry(0.9, 0.3, 0.1), carbonMat);
-            grill.position.set(0, 0.1, -2.25);
-            car.add(grill);
-            const headlight = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.08, 0.2), new THREE.MeshBasicMaterial({ color: 0xffffff }));
-            headlight.position.set(0.8, 0.2, -2.2);
-            const headlight2 = headlight.clone(); headlight2.position.x = -0.8;
-            car.add(headlight, headlight2);
-
-            // Aileron & Échappements
-            const wingTop = new THREE.Mesh(new THREE.BoxGeometry(2.4, 0.05, 0.5), carbonMat);
-            wingTop.position.set(0, 0.6, 2.1);
-            car.add(wingTop);
-
-            // Roues
             const wheelGeo = new THREE.CylinderGeometry(0.45, 0.45, 0.4, 24);
             const wPos = [[1.15, -0.1, 1.5], [-1.15, -0.1, 1.5], [1.15, -0.1, -1.5], [-1.15, -0.1, -1.5]];
             wPos.forEach(pos => {
-                const w = new THREE.Mesh(wheelGeo, new THREE.MeshStandardMaterial({ color: 0x000000 }));
+                const w = new THREE.Mesh(wheelGeo, new THREE.MeshStandardMaterial({ color: 0x111111 }));
                 w.rotation.z = Math.PI / 2;
                 w.position.set(...pos);
                 wheels.push(w);
@@ -104,85 +117,89 @@
             });
             scene.add(car);
 
-            grid = new THREE.GridHelper(600, 100, 0xbbbbbb, 0xeeeeee);
-            grid.position.y = -0.55;
-            scene.add(grid);
-
-            // OBSTACLES RÉDUITS (8 au lieu de 15)
-            for(let i = 0; i < 8; i++) { createObstacle(); }
+            // OBSTACLES
+            for(let i = 0; i < 6; i++) createObstacle();
 
             animate();
         }
 
         function createObstacle() {
-            const obs = new THREE.Mesh(
-                new THREE.CylinderGeometry(0.7, 0.7, 6, 16),
-                new THREE.MeshStandardMaterial({ color: 0xff0000, emissive: 0xff0000, emissiveIntensity: 0.3 })
-            );
-            obs.position.set(Math.random() * 50 - 25, 3, Math.random() * -200 - 30);
-            scene.add(obs);
+            const obs = new THREE.Mesh(new THREE.CylinderGeometry(0.7, 0.7, 8, 16), new THREE.MeshStandardMaterial({ color: 0xff0000 }));
+            obs.position.set(Math.random() * 40 - 20, 4, Math.random() * -300 - 50);
+            worldGroup.add(obs);
             obstacles.push(obs);
         }
 
-        function resetGame() {
-            document.getElementById('flash').style.opacity = '1';
-            setTimeout(() => document.getElementById('flash').style.opacity = '0', 150);
-            speed = 0;
-            angle = 0;
-            grid.position.set(0, -0.55, 0);
-            obstacles.forEach(obs => {
-                obs.position.z = Math.random() * -200 - 30;
-                obs.position.x = Math.random() * 50 - 25;
-            });
+        function createSmoke() {
+            if (Math.abs(speed) < 0.01) return;
+            const smokeGeo = new THREE.SphereGeometry(0.1, 8, 8);
+            const smokeMat = new THREE.MeshBasicMaterial({ color: 0xaaaaaa, transparent: true, opacity: 0.5 });
+            const p = new THREE.Mesh(smokeGeo, smokeMat);
+            // Sortie des pots d'échappement
+            p.position.set(car.position.x + (Math.random()-0.5), 0, car.position.z + 2.3);
+            scene.add(p);
+            smokeParticles.push({ mesh: p, life: 1.0 });
         }
 
-        window.onkeydown = (e) => keys[e.code] = true;
+        window.onkeydown = (e) => {
+            keys[e.code] = true;
+            if(e.code === 'KeyL') {
+                lightsOn = !lightsOn;
+                headlights.forEach(l => l.intensity = lightsOn ? 50 : 0);
+            }
+        };
         window.onkeyup = (e) => keys[e.code] = false;
 
         function animate() {
             requestAnimationFrame(animate);
 
-            if (keys['ArrowUp'] || keys['KeyW']) {
-                if (speed < MAX_SPEED_UNIT_FWD) speed += ACCEL_FWD;
-            } else if (keys['ArrowDown'] || keys['KeyS']) {
-                if (speed > -MAX_SPEED_UNIT_BWD) speed -= ACCEL_BWD;
-            } else {
-                if (speed > 0) speed = Math.max(0, speed - FRICTION);
-                else if (speed < 0) speed = Math.min(0, speed + FRICTION);
-            }
+            if (keys['ArrowUp'] || keys['KeyW']) { if (speed < MAX_SPEED_UNIT_FWD) speed += ACCEL_FWD; createSmoke(); }
+            else if (keys['ArrowDown'] || keys['KeyS']) { if (speed > -MAX_SPEED_UNIT_BWD) speed -= ACCEL_BWD; }
+            else { if (speed > 0) speed = Math.max(0, speed - FRICTION); else if (speed < 0) speed = Math.min(0, speed + FRICTION); }
 
-            if (keys['ArrowLeft'] || keys['KeyA']) angle += 0.035;
-            if (keys['ArrowRight'] || keys['KeyD']) angle -= 0.035;
+            if (keys['ArrowLeft'] || keys['KeyA']) angle += 0.03;
+            if (keys['ArrowRight'] || keys['KeyD']) angle -= 0.03;
 
-            let moveZ = Math.cos(angle) * speed * 10;
-            let moveX = Math.sin(angle) * speed * 10;
-            grid.position.z += moveZ;
-            grid.position.x += moveX;
+            car.rotation.y = angle;
+            const moveZ = Math.cos(angle) * speed;
+            const moveX = Math.sin(angle) * speed;
+            worldGroup.position.z += moveZ * 10;
+            worldGroup.position.x += moveX * 10;
 
-            if (Math.abs(grid.position.z) > 12) grid.position.z = 0;
-            if (Math.abs(grid.position.x) > 12) grid.position.x = 0;
+            // Reset loop monde
+            if (worldGroup.position.z > 500) worldGroup.position.z = 0;
 
-            obstacles.forEach(obs => {
-                obs.position.z += moveZ;
-                obs.position.x += moveX;
-                if (Math.sqrt(obs.position.x**2 + obs.position.z**2) < 2.4) resetGame();
-                if (obs.position.z > 20) {
-                    obs.position.z = -200;
-                    obs.position.x = Math.random() * 60 - 30;
+            // Fumée life cycle
+            smokeParticles.forEach((p, i) => {
+                p.life -= 0.02;
+                p.mesh.scale.multiplyScalar(1.05);
+                p.mesh.material.opacity = p.life;
+                p.mesh.position.y += 0.02;
+                if(p.life <= 0) {
+                    scene.remove(p.mesh);
+                    smokeParticles.splice(i, 1);
                 }
             });
 
-            car.rotation.y = angle;
-            wheels.forEach(w => w.rotation.x -= speed * 2.5);
+            // Collisions
+            obstacles.forEach(obs => {
+                const worldObsPos = new THREE.Vector3();
+                obs.getWorldPosition(worldObsPos);
+                const dist = Math.sqrt(worldObsPos.x**2 + worldObsPos.z**2);
+                if (dist < 2.2) {
+                    document.getElementById('flash').style.opacity = '1';
+                    setTimeout(() => document.getElementById('flash').style.opacity = '0', 150);
+                    speed = 0; worldGroup.position.set(0,0,0);
+                }
+            });
 
-            let displaySpeed = 0;
-            if (speed >= 0) displaySpeed = Math.round((speed / MAX_SPEED_UNIT_FWD) * 250);
-            else displaySpeed = Math.round((Math.abs(speed) / MAX_SPEED_UNIT_BWD) * 125);
+            wheels.forEach(w => w.rotation.x -= speed * 2);
             
+            let displaySpeed = speed >= 0 ? Math.round((speed / MAX_SPEED_UNIT_FWD) * 250) : Math.round((Math.abs(speed) / MAX_SPEED_UNIT_BWD) * 125);
             document.getElementById('speed-val').innerText = displaySpeed;
+
             renderer.render(scene, camera);
         }
-
         init();
     </script>
 </body>
