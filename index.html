@@ -2,7 +2,7 @@
 <html lang="fr">
 <head>
     <meta charset="UTF-8">
-    <title>Jochua Simulator | Terrain & Tech Fix</title>
+    <title>Jochua Simulator | Final Ground & Light Fix</title>
     <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@700;900&display=swap" rel="stylesheet">
     <style>
         body { margin: 0; overflow: hidden; background: #87CEEB; font-family: 'Orbitron', sans-serif; }
@@ -24,7 +24,7 @@
         <div class="stat"><span id="speed-val">0</span> <small style="font-size: 20px;">KM/H</small></div>
     </div>
     <div id="controls">
-        Z/S: Gaz/Reculer | Q: Cligno G | E: Cligno D | G: Warnings | L: Phares
+        Z/S: Gaz/Reculer | A: Cligno G | E: Cligno D | G: Warnings | L: Phares
     </div>
 
     <script type="importmap">
@@ -38,7 +38,7 @@
         let obstacles = [], particles = [], headlights = [], rearLights = [];
         let blinkerL, blinkerR;
         let speed = 0, angle = 0, lightsOn = false;
-        let blinkTimer = 0, blinkMode = 0; // 0:off, 1:L, 2:R, 3:Both
+        let blinkTimer = 0, blinkMode = 0; // 0:off, 1:A(G), 2:E(D), 3:G(Both)
         const keys = {};
 
         const MAX_SPEED_FWD = 1.4; 
@@ -49,7 +49,7 @@
         function init() {
             scene = new THREE.Scene();
             scene.background = new THREE.Color(0x87CEEB);
-            scene.fog = new THREE.Fog(0x87CEEB, 20, 150);
+            scene.fog = new THREE.Fog(0x87CEEB, 20, 200);
 
             camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 1000);
             camera.position.set(0, 5, 12);
@@ -67,32 +67,33 @@
             worldGroup = new THREE.Group();
             scene.add(worldGroup);
 
-            // --- ROUTE & TERRAIN ---
+            // --- LE SOL COMPLET (PLAT) ---
+            // Route
             const road = new THREE.Mesh(new THREE.PlaneGeometry(25, 10000), new THREE.MeshStandardMaterial({ color: 0x1a1a1a }));
             road.rotation.x = -Math.PI / 2;
             worldGroup.add(road);
             
-            // Lignes
+            // Lignes de route
             for(let i = 0; i < 200; i++) {
                 const line = new THREE.Mesh(new THREE.PlaneGeometry(0.5, 8), new THREE.MeshBasicMaterial({color: 0xffffff}));
                 line.rotation.x = -Math.PI / 2; line.position.set(0, 0.02, -i * 40);
                 worldGroup.add(line);
             }
 
-            // Collines/Herbe sur les côtés
-            for(let i = 0; i < 40; i++) {
-                const hillGeo = new THREE.BoxGeometry(100, Math.random() * 5 + 2, 100);
-                const hillMat = new THREE.MeshStandardMaterial({color: 0x2d5a27});
-                const hillL = new THREE.Mesh(hillGeo, hillMat);
-                hillL.position.set(-70, 0, -i * 120);
-                const hillR = hillL.clone();
-                hillR.position.x = 70;
-                worldGroup.add(hillL, hillR);
-            }
+            // Terrain à gauche et à droite (PLAT et au même niveau)
+            const grassMat = new THREE.MeshStandardMaterial({color: 0x2d5a27});
+            const grassL = new THREE.Mesh(new THREE.PlaneGeometry(500, 10000), grassMat);
+            grassL.rotation.x = -Math.PI / 2;
+            grassL.position.set(-262.5, -0.01, 0); // Collé à la route
+            worldGroup.add(grassL);
 
-            // --- LA JOCHUA (DÉTAILLÉE & REMONTÉE) ---
+            const grassR = grassL.clone();
+            grassR.position.x = 262.5;
+            worldGroup.add(grassR);
+
+            // --- LA JOCHUA ---
             car = new THREE.Group();
-            car.position.y = 1.0; // Encore plus haute !
+            car.position.y = 1.0; 
             scene.add(car);
 
             const paint = new THREE.MeshStandardMaterial({ color: 0x050505, metalness: 0.9, roughness: 0.1 });
@@ -104,15 +105,7 @@
             const roof = new THREE.Mesh(new THREE.BoxGeometry(1.5, 0.5, 2.4), new THREE.MeshStandardMaterial({color:0x000000}));
             roof.position.set(0, 0.6, 0.2); car.add(roof);
 
-            // Calandre & Aileron
-            const g1 = new THREE.Mesh(new THREE.BoxGeometry(0.4, 0.3, 0.1), chrome); g1.position.set(0.25, 0, -2.35);
-            const g2 = g1.clone(); g2.position.x = -0.25;
-            car.add(g1, g2);
-
-            const aileron = new THREE.Mesh(new THREE.BoxGeometry(2.4, 0.05, 0.7), paint);
-            aileron.position.set(0, 0.7, 2.1); car.add(aileron);
-
-            // Lumières
+            // Phares & Clignotants
             const headL = new THREE.SpotLight(0xffffff, 0, 50, 0.4);
             headL.position.set(0.8, 0.1, -2.3);
             const headR = headL.clone(); headR.position.x = -0.8;
@@ -124,7 +117,6 @@
             const rR = rL.clone(); rR.position.x = -0.8;
             car.add(rL, rR); rearLights = [rL, rR];
 
-            // CLIGNOTANTS (Correction visuelle)
             const cliGeo = new THREE.BoxGeometry(0.4, 0.2, 0.1);
             blinkerL = new THREE.Mesh(cliGeo, new THREE.MeshBasicMaterial({color: 0xffaa00, transparent: true, opacity: 0}));
             blinkerL.position.set(0.9, 0.2, -2.31);
@@ -139,21 +131,18 @@
                 wheels.push(w); car.add(w);
             });
 
-            for(let i=0; i<6; i++) createObstacle();
+            for(let i=0; i<8; i++) createObstacle();
             animate();
         }
 
         function createObstacle() {
             const obs = new THREE.Mesh(new THREE.CylinderGeometry(0.8, 0.8, 12, 16), new THREE.MeshStandardMaterial({color: 0xff0000}));
-            obs.position.set(Math.random()*40-20, 6, Math.random()*-600-100);
+            obs.position.set(Math.random()*40-20, 6, Math.random()*-800-100);
             worldGroup.add(obs); obstacles.push(obs);
         }
 
-        function spawnParticle(x, y, z, type) {
-            const size = type === 'smoke' ? 0.2 : 0.15;
-            const p = new THREE.Mesh(new THREE.SphereGeometry(size, 6, 6), new THREE.MeshBasicMaterial({
-                color: type === 'smoke' ? 0xcccccc : 0xffffff, transparent: true, opacity: 0.6
-            }));
+        function spawnParticle(x, y, z) {
+            const p = new THREE.Mesh(new THREE.SphereGeometry(0.18, 6, 6), new THREE.MeshBasicMaterial({color: 0xcccccc, transparent: true, opacity: 0.6}));
             const worldPos = new THREE.Vector3(x, y, z).applyMatrix4(car.matrixWorld);
             p.position.copy(worldPos);
             scene.add(p);
@@ -164,10 +153,10 @@
             keys[e.code] = true;
             if(e.code === 'KeyL') { lightsOn = !lightsOn; headlights.forEach(l => l.intensity = lightsOn ? 100 : 0); }
             
-            // LOGIQUE CLIGNOTANTS RÉPARÉE
-            if(e.code === 'KeyQ') blinkMode = (blinkMode === 1) ? 0 : 1;
-            if(e.code === 'KeyE') blinkMode = (blinkMode === 2) ? 0 : 2;
-            if(e.code === 'KeyG') blinkMode = (blinkMode === 3) ? 0 : 3;
+            // --- NOUVELLE LOGIQUE DE TOUCHES ---
+            if(e.code === 'KeyA') { blinkMode = (blinkMode === 1) ? 0 : 1; }
+            if(e.code === 'KeyE') { blinkMode = (blinkMode === 2) ? 0 : 2; }
+            if(e.code === 'KeyG') { blinkMode = (blinkMode === 3) ? 0 : 3; }
         };
         window.onkeyup = (e) => keys[e.code] = false;
 
@@ -175,15 +164,15 @@
             requestAnimationFrame(animate);
             if(keys['ArrowUp'] || keys['KeyW']) { 
                 if(speed < MAX_SPEED_FWD) speed += ACCEL; 
-                spawnParticle(0.6, -0.4, 2.3, 'smoke'); spawnParticle(-0.6, -0.4, 2.3, 'smoke');
+                spawnParticle(0.6, -0.4, 2.3); spawnParticle(-0.6, -0.4, 2.3);
             } else if(keys['ArrowDown'] || keys['KeyS']) { 
                 if(speed > -MAX_SPEED_BWD) speed -= ACCEL; 
             } else { 
                 if(speed > 0) speed = Math.max(0, speed - FRICTION); else if(speed < 0) speed = Math.min(0, speed + FRICTION); 
             }
 
-            if(keys['ArrowLeft'] || keys['KeyA']) { angle += 0.035; if(speed > 0.2) spawnParticle(1.1, -0.8, 1.6, 'tire'); }
-            if(keys['ArrowRight'] || keys['KeyD']) { angle -= 0.035; if(speed > 0.2) spawnParticle(-1.1, -0.8, 1.6, 'tire'); }
+            if(keys['ArrowLeft'] || keys['KeyA']) angle += 0.035;
+            if(keys['ArrowRight'] || keys['KeyD']) angle -= 0.035;
 
             car.rotation.y = angle;
             worldGroup.position.z += Math.cos(angle) * speed * 10;
