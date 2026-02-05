@@ -9,11 +9,11 @@
         #hud { 
             position: absolute; top: 30px; left: 30px; 
             color: #fff; border-left: 6px solid #fff; padding-left: 20px;
-            text-shadow: 2px 2px 4px rgba(0,0,0,0.5); pointer-events: none; z-index: 10;
+            text-shadow: 2px 2px 4px rgba(0,0,0,0.8); pointer-events: none; z-index: 10;
         }
         .stat { font-size: 56px; font-weight: 900; line-height: 0.9; }
         .label { font-size: 14px; opacity: 0.8; letter-spacing: 5px; text-transform: uppercase; margin-bottom: 5px; }
-        #controls { position: absolute; bottom: 20px; left: 30px; color: white; font-size: 11px; opacity: 0.8; line-height: 1.4; }
+        #controls { position: absolute; bottom: 20px; left: 30px; color: white; font-size: 11px; opacity: 0.8; line-height: 1.4; text-shadow: 1px 1px 2px black; }
     </style>
 </head>
 <body>
@@ -22,7 +22,7 @@
         <div class="stat"><span id="speed-val">0</span> <small style="font-size: 20px;">KM/H</small></div>
     </div>
     <div id="controls">
-        Z/S: Gaz/Reculer | Q: Clignotant Gauche | E: Clignotant Droite | G: Clignotants | L: Phares
+        Z/S: Gaz/Frein | Q: Clignotant Gauche | E: Clignotant Droite | G: Clignotants | L: Phares
     </div>
 
     <script type="importmap">
@@ -32,136 +32,285 @@
     <script type="module">
         import * as THREE from 'three';
 
-        let scene, camera, renderer, car, worldGroup, wheels = [];
-        let obstacles = [], particles = [];
+        let scene, camera, renderer, car, worldGroup;
+        let roadTiles = []; 
+        let particles = [];
         let headlightBeams = [], headlightGlows = [], taillightGlows = [], blinkerGlows = [];
         let meshHeadL, meshHeadR, meshRearL, meshRearR, meshBlinkL, meshBlinkR;
+        let wheels = [];
         
         let speed = 0, angle = 0, driftAngle = 0;
         let lightsOn = false, blinkTimer = 0, blinkMode = 0; 
         const keys = {};
 
-        const MAX_SPEED_FWD = 1.1; 
-        const ACCEL = 0.00065; 
-        const FRICTION = 0.0025;
-        const STEER_SPEED = 0.028;
-        const WORLD_SIZE = 20000;
+        // CONFIG
+        const MAX_SPEED_FWD = 1.3; 
+        const ACCEL = 0.0008; 
+        const FRICTION = 0.003;
+        const STEER_SPEED = 0.03;
+        const TILE_LENGTH = 200; // Longueur d'un bout de route
+        const ROAD_WIDTH = 30;   // Largeur de la route
 
         function init() {
             scene = new THREE.Scene();
             scene.background = new THREE.Color(0x87CEEB);
-            scene.fog = new THREE.Fog(0x87CEEB, 50, 400);
+            // Brouillard pour cacher l'apparition de la route au loin
+            scene.fog = new THREE.Fog(0x87CEEB, 50, 300);
 
-            camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 2000);
-            camera.position.set(0, 5, 12);
+            camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 1000);
+            camera.position.set(0, 4.5, 10); // Caméra un peu plus basse pour le style
 
             renderer = new THREE.WebGLRenderer({ antialias: true });
             renderer.setSize(window.innerWidth, window.innerHeight);
             renderer.setPixelRatio(window.devicePixelRatio);
             document.body.appendChild(renderer.domElement);
 
-            scene.add(new THREE.AmbientLight(0xffffff, 0.4));
+            // Lumières du monde
+            scene.add(new THREE.AmbientLight(0xffffff, 0.5));
             const sun = new THREE.DirectionalLight(0xffffff, 0.8);
-            sun.position.set(50, 100, 50);
+            sun.position.set(100, 100, 50);
             scene.add(sun);
 
             worldGroup = new THREE.Group();
             scene.add(worldGroup);
 
-            // TERRAIN
-            const road = new THREE.Mesh(new THREE.PlaneGeometry(25, WORLD_SIZE), new THREE.MeshStandardMaterial({ color: 0x111111 }));
-            road.rotation.x = -Math.PI / 2; road.position.z = -WORLD_SIZE/2 + 50;
-            worldGroup.add(road);
-            
-            for(let i = 0; i < 500; i++) {
-                const line = new THREE.Mesh(new THREE.PlaneGeometry(0.5, 8), new THREE.MeshBasicMaterial({color: 0xffffff}));
-                line.rotation.x = -Math.PI / 2; line.position.set(0, 0.05, -i * 50);
-                worldGroup.add(line);
+            // --- CRÉATION DE LA ROUTE INFINIE ---
+            // On crée 3 tuiles de route qui vont tourner en boucle
+            for(let i = 0; i < 4; i++) {
+                createRoadTile(i * TILE_LENGTH);
             }
 
-            const plainL = new THREE.Mesh(new THREE.PlaneGeometry(1000, WORLD_SIZE), new THREE.MeshStandardMaterial({color: 0x228B22}));
-            plainL.rotation.x = -Math.PI / 2; plainL.position.set(-512.5, -0.01, -WORLD_SIZE/2 + 50);
-            worldGroup.add(plainL);
-            const plainR = plainL.clone(); plainR.position.x = 512.5; worldGroup.add(plainR);
-
-            // OBSTACLES (MODE FANTOME)
-            for(let i = 0; i < 35; i++) {
-                const obs = new THREE.Mesh(new THREE.CylinderGeometry(0.8, 0.8, 15, 16), new THREE.MeshStandardMaterial({color: 0xff0000}));
-                obs.position.set(Math.random() * 40 - 20, 7.5, -i * 120 - 100);
-                worldGroup.add(obs);
-                obstacles.push(obs);
-            }
-
-            // VOITURE
-            car = new THREE.Group();
-            car.position.y = 1.1; scene.add(car);
-            const bodyMat = new THREE.MeshStandardMaterial({ color: 0x0a0a0a, metalness: 0.9, roughness: 0.1 });
-            const chromeMat = new THREE.MeshStandardMaterial({ color: 0xffffff, metalness: 1 });
-            const offLightMat = new THREE.MeshStandardMaterial({ color: 0x333333 });
-            const mirrorGlassMat = new THREE.MeshStandardMaterial({ color: 0xaaddff, metalness: 1.0, roughness: 0.0 });
-
-            car.add(new THREE.Mesh(new THREE.BoxGeometry(2.2, 0.6, 4.8), bodyMat));
-            const roof = new THREE.Mesh(new THREE.BoxGeometry(1.5, 0.5, 2.6), new THREE.MeshStandardMaterial({color: 0x000000}));
-            roof.position.set(0, 0.5, 0.1); car.add(roof);
-
-            // RÉTROVISEURS
-            const mirShellL = new THREE.Mesh(new THREE.BoxGeometry(0.4, 0.2, 0.3), bodyMat);
-            mirShellL.position.set(1.2, 0.45, -0.8);
-            const mirGlassL = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.15, 0.25), mirrorGlassMat);
-            mirGlassL.position.set(1.4, 0.45, -0.8); car.add(mirShellL, mirGlassL);
-            const mirShellR = mirShellL.clone(); mirShellR.position.x = -1.2;
-            const mirGlassR = mirGlassL.clone(); mirGlassR.position.x = -1.4; car.add(mirShellR, mirGlassR);
-
-            const gL = new THREE.Mesh(new THREE.BoxGeometry(0.45, 0.5, 0.1), chromeMat);
-            gL.position.set(0.3, -0.05, -2.4);
-            const gR = gL.clone(); gR.position.x = -0.3; car.add(gL, gR);
-            const wing = new THREE.Mesh(new THREE.BoxGeometry(2.5, 0.05, 0.8), bodyMat);
-            wing.position.set(0, 0.65, 2.2); car.add(wing);
-
-            for(let x of [-0.6, -0.4, 0.4, 0.6]) {
-                const ex = new THREE.Mesh(new THREE.CylinderGeometry(0.1, 0.1, 0.4), chromeMat);
-                ex.rotation.x = Math.PI/2; ex.position.set(x, -0.2, 2.4); car.add(ex);
-            }
-
-            // LUMIERES
-            meshHeadL = new THREE.Mesh(new THREE.BoxGeometry(0.4, 0.15, 0.1), offLightMat.clone());
-            meshHeadL.position.set(0.85, 0.1, -2.4);
-            meshHeadR = meshHeadL.clone(); meshHeadR.position.x = -0.85; car.add(meshHeadL, meshHeadR);
-
-            const spotL = new THREE.SpotLight(0xffffff, 0, 100, 0.6, 0.5);
-            spotL.position.set(0.85, 0.1, -2.4); spotL.target.position.set(0.85, 0, -30);
-            const spotR = spotL.clone(); spotR.position.x = -0.85; spotR.target.position.set(-0.85, 0, -30);
-            car.add(spotL, spotR, spotL.target, spotR.target); headlightBeams = [spotL, spotR];
-
-            const glowL = new THREE.PointLight(0xffffff, 0, 5); glowL.position.set(0.85, 0.1, -2.5);
-            const glowR = glowL.clone(); glowR.position.x = -0.85; car.add(glowL, glowR); headlightGlows = [glowL, glowR];
-
-            meshRearL = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.15, 0.1), offLightMat.clone());
-            meshRearL.position.set(0.85, 0.1, 2.4);
-            meshRearR = meshRearL.clone(); meshRearR.position.x = -0.85; car.add(meshRearL, meshRearR);
-            const tailL = new THREE.PointLight(0xff0000, 0, 10); tailL.position.set(0.85, 0.1, 2.5);
-            const tailR = tailL.clone(); tailR.position.x = -0.85; car.add(tailL, tailR); taillightGlows = [tailL, tailR];
-
-            meshBlinkL = new THREE.Mesh(new THREE.BoxGeometry(0.4, 0.08, 0.1), offLightMat.clone());
-            meshBlinkL.position.set(0.85, 0.25, -2.41);
-            meshBlinkR = meshBlinkL.clone(); meshBlinkR.position.x = -0.85; car.add(meshBlinkL, meshBlinkR);
-            const blinkLightL = new THREE.PointLight(0xffaa00, 0, 6); blinkLightL.position.set(0.85, 0.25, -2.5);
-            const blinkLightR = blinkLightL.clone(); blinkLightR.position.x = -0.85; car.add(blinkLightL, blinkLightR);
-            blinkerGlows = [blinkLightL, blinkLightR];
-
-            const wPos = [[1.15, -0.4, 1.7], [-1.15, -0.4, 1.7], [1.15, -0.4, -1.7], [-1.15, -0.4, -1.7]];
-            wPos.forEach(pos => {
-                const w = new THREE.Mesh(new THREE.CylinderGeometry(0.6, 0.6, 0.45, 24), new THREE.MeshStandardMaterial({color: 0x111111}));
-                w.rotation.z = Math.PI/2; w.position.set(...pos); wheels.push(w); car.add(w);
-            });
+            // --- CRÉATION DE LA VOITURE DÉTAILLÉE ---
+            createHighDetailCar();
 
             animate();
         }
 
+        function createRoadTile(zPos) {
+            const tileGroup = new THREE.Group();
+            
+            // 1. Le bitume
+            const asphalt = new THREE.Mesh(
+                new THREE.PlaneGeometry(ROAD_WIDTH, TILE_LENGTH), 
+                new THREE.MeshStandardMaterial({ color: 0x1a1a1a, roughness: 0.8 })
+            );
+            asphalt.rotation.x = -Math.PI / 2;
+            tileGroup.add(asphalt);
+
+            // 2. Lignes blanches
+            const lineGeo = new THREE.PlaneGeometry(0.4, 8);
+            const lineMat = new THREE.MeshBasicMaterial({color: 0xffffff});
+            for(let i = -TILE_LENGTH/2; i < TILE_LENGTH/2; i+=20) {
+                const line = new THREE.Mesh(lineGeo, lineMat);
+                line.rotation.x = -Math.PI/2;
+                line.position.set(0, 0.02, i);
+                tileGroup.add(line);
+            }
+
+            // 3. L'herbe sur les côtés (très large pour ne pas voir le vide)
+            const grassGeo = new THREE.PlaneGeometry(400, TILE_LENGTH);
+            const grassMat = new THREE.MeshStandardMaterial({color: 0x228B22});
+            
+            const grassL = new THREE.Mesh(grassGeo, grassMat);
+            grassL.rotation.x = -Math.PI/2;
+            grassL.position.set(-(ROAD_WIDTH/2 + 200), -0.05, 0);
+            tileGroup.add(grassL);
+
+            const grassR = grassL.clone();
+            grassR.position.set((ROAD_WIDTH/2 + 200), -0.05, 0);
+            tileGroup.add(grassR);
+
+            // 4. Barrières de sécurité (Rails)
+            const railGeo = new THREE.BoxGeometry(1, 0.8, TILE_LENGTH);
+            const railMat = new THREE.MeshStandardMaterial({color: 0xaaaaaa, metalness: 0.6});
+            
+            const railL = new THREE.Mesh(railGeo, railMat);
+            railL.position.set(-(ROAD_WIDTH/2 + 1), 0.5, 0);
+            tileGroup.add(railL);
+
+            const railR = railL.clone();
+            railR.position.set((ROAD_WIDTH/2 + 1), 0.5, 0);
+            tileGroup.add(railR);
+
+            // Placement initial
+            tileGroup.position.z = -zPos; 
+            worldGroup.add(tileGroup);
+            roadTiles.push(tileGroup);
+        }
+
+        function createHighDetailCar() {
+            car = new THREE.Group();
+            car.position.y = 0.8; // Hauteur de suspension
+            scene.add(car);
+
+            // Matériaux
+            const paintMat = new THREE.MeshStandardMaterial({ color: 0x050505, metalness: 0.7, roughness: 0.2 }); // Noir métal
+            const glassMat = new THREE.MeshStandardMaterial({ color: 0x111111, metalness: 0.9, roughness: 0.1 }); // Vitres
+            const chromeMat = new THREE.MeshStandardMaterial({ color: 0xffffff, metalness: 1.0, roughness: 0.1 });
+            const plasticMat = new THREE.MeshStandardMaterial({ color: 0x111111, roughness: 0.8 });
+            const rimMat = new THREE.MeshStandardMaterial({ color: 0xcccccc, metalness: 0.8 });
+            const offLightMat = new THREE.MeshStandardMaterial({ color: 0x333333 });
+            const mirrorMat = new THREE.MeshStandardMaterial({ color: 0xaaddff, metalness: 1, roughness: 0 });
+
+            // --- CARROSSERIE ---
+            // 1. Châssis principal (bas)
+            const chassis = new THREE.Mesh(new THREE.BoxGeometry(2.1, 0.6, 4.6), paintMat);
+            chassis.position.y = 0.4;
+            car.add(chassis);
+
+            // 2. Cabine (haut)
+            const cabin = new THREE.Mesh(new THREE.BoxGeometry(1.7, 0.55, 2.4), glassMat);
+            cabin.position.set(0, 0.95, 0.2);
+            car.add(cabin);
+            
+            // Toit (pour ne pas que la cabine soit 100% verre)
+            const roof = new THREE.Mesh(new THREE.BoxGeometry(1.75, 0.05, 2.5), paintMat);
+            roof.position.set(0, 1.25, 0.2);
+            car.add(roof);
+
+            // 3. Capot (devant)
+            const hood = new THREE.Mesh(new THREE.BoxGeometry(1.6, 0.1, 1.3), paintMat);
+            hood.position.set(0, 0.75, -1.8);
+            hood.rotation.x = 0.1; // Légère inclinaison
+            car.add(hood);
+
+            // 4. Coffre (arrière)
+            const trunk = new THREE.Mesh(new THREE.BoxGeometry(1.7, 0.1, 0.8), paintMat);
+            trunk.position.set(0, 0.72, 2.0);
+            car.add(trunk);
+
+            // 5. Passages de roues (Fenders) - pour donner du volume
+            const fenderGeo = new THREE.BoxGeometry(0.2, 0.4, 0.9);
+            const fl = new THREE.Mesh(fenderGeo, paintMat); fl.position.set(1.1, 0.4, -1.5);
+            const fr = fl.clone(); fr.position.set(-1.1, 0.4, -1.5);
+            const rl = fl.clone(); rl.position.set(1.1, 0.4, 1.5);
+            const rr = fl.clone(); rr.position.set(-1.1, 0.4, 1.5);
+            car.add(fl, fr, rl, rr);
+
+            // --- DÉTAILS ---
+            // Calandre (Grille "Haricots")
+            const grillL = new THREE.Mesh(new THREE.BoxGeometry(0.3, 0.25, 0.05), new THREE.MeshStandardMaterial({color:0x111111}));
+            grillL.position.set(0.18, 0.5, -2.31);
+            const grillR = grillL.clone(); grillR.position.x = -0.18;
+            car.add(grillL, grillR);
+            // Contour chrome grille
+            const grillFrame = new THREE.Mesh(new THREE.BoxGeometry(0.7, 0.3, 0.02), chromeMat);
+            grillFrame.position.set(0, 0.5, -2.31);
+            car.add(grillFrame);
+
+            // Pare-chocs avant
+            const bumperF = new THREE.Mesh(new THREE.BoxGeometry(2.1, 0.3, 0.2), paintMat);
+            bumperF.position.set(0, 0.2, -2.3);
+            car.add(bumperF);
+
+            // Pare-chocs arrière
+            const bumperR = new THREE.Mesh(new THREE.BoxGeometry(2.1, 0.35, 0.2), paintMat);
+            bumperR.position.set(0, 0.25, 2.35);
+            car.add(bumperR);
+
+            // Pots d'échappement (Quad tips)
+            const pipeGeo = new THREE.CylinderGeometry(0.06, 0.06, 0.2);
+            for(let x of [-0.6, -0.45, 0.45, 0.6]) {
+                const pipe = new THREE.Mesh(pipeGeo, chromeMat);
+                pipe.rotation.x = Math.PI/2;
+                pipe.position.set(x, 0.15, 2.45);
+                car.add(pipe);
+            }
+
+            // Poignées de portes
+            const handleGeo = new THREE.BoxGeometry(0.05, 0.05, 0.2);
+            const hL = new THREE.Mesh(handleGeo, chromeMat); hL.position.set(1.06, 0.6, -0.2);
+            const hR = hL.clone(); hR.position.x = -1.06;
+            car.add(hL, hR);
+
+            // Rétroviseurs (avec glace)
+            const mirShell = new THREE.Mesh(new THREE.BoxGeometry(0.3, 0.15, 0.2), paintMat);
+            mirShell.position.set(1.15, 0.75, -1.0);
+            const mirGlass = new THREE.Mesh(new THREE.BoxGeometry(0.02, 0.12, 0.18), mirrorMat);
+            mirGlass.position.set(1.25, 0.75, -1.0); // Surface réfléchissante
+            car.add(mirShell, mirGlass);
+            const mirShellR = mirShell.clone(); mirShellR.position.x = -1.15;
+            const mirGlassR = mirGlass.clone(); mirGlassR.position.x = -1.25;
+            car.add(mirShellR, mirGlassR);
+
+            // Plaque d'immatriculation
+            const plate = new THREE.Mesh(new THREE.PlaneGeometry(0.5, 0.15), new THREE.MeshBasicMaterial({color: 0xffffff}));
+            plate.position.set(0, 0.2, 2.46);
+            plate.rotation.y = Math.PI; // Regarde vers l'arrière
+            car.add(plate);
+
+            // --- LUMIÈRES (Physique + Mesh) ---
+            
+            // Mesh Phares Avant
+            meshHeadL = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.15, 0.1), offLightMat.clone());
+            meshHeadL.position.set(0.7, 0.5, -2.3);
+            meshHeadR = meshHeadL.clone(); meshHeadR.position.x = -0.7;
+            car.add(meshHeadL, meshHeadR);
+
+            // Spots (Lumière qui éclaire la route)
+            const spotL = new THREE.SpotLight(0xffffff, 0, 150, 0.6, 0.5);
+            spotL.position.set(0.7, 0.5, -2.2); spotL.target.position.set(0.7, 0, -30);
+            const spotR = spotL.clone(); spotR.position.x = -0.7; spotR.target.position.set(-0.7, 0, -30);
+            car.add(spotL, spotR, spotL.target, spotR.target); headlightBeams = [spotL, spotR];
+
+            // Glows Avant (L'effet éblouissant)
+            const glowL = new THREE.PointLight(0xffffff, 0, 4); glowL.position.set(0.7, 0.5, -2.4);
+            const glowR = glowL.clone(); glowR.position.x = -0.7; 
+            car.add(glowL, glowR); headlightGlows = [glowL, glowR];
+
+            // Mesh Feux Arrière
+            meshRearL = new THREE.Mesh(new THREE.BoxGeometry(0.6, 0.18, 0.1), offLightMat.clone());
+            meshRearL.position.set(0.7, 0.6, 2.3);
+            meshRearR = meshRearL.clone(); meshRearR.position.x = -0.7;
+            car.add(meshRearL, meshRearR);
+
+            // Glows Arrière
+            const tailL = new THREE.PointLight(0xff0000, 0, 8); tailL.position.set(0.7, 0.6, 2.4);
+            const tailR = tailL.clone(); tailR.position.x = -0.7;
+            car.add(tailL, tailR); taillightGlows = [tailL, tailR];
+
+            // Clignotants (Petite barre orange sous le phare)
+            meshBlinkL = new THREE.Mesh(new THREE.BoxGeometry(0.4, 0.05, 0.1), offLightMat.clone());
+            meshBlinkL.position.set(0.7, 0.4, -2.3);
+            meshBlinkR = meshBlinkL.clone(); meshBlinkR.position.x = -0.7;
+            car.add(meshBlinkL, meshBlinkR);
+
+            const blinkLightL = new THREE.PointLight(0xffaa00, 0, 5); blinkLightL.position.set(0.7, 0.4, -2.4);
+            const blinkLightR = blinkLightL.clone(); blinkLightR.position.x = -0.7;
+            car.add(blinkLightL, blinkLightR);
+            blinkerGlows = [blinkLightL, blinkLightR];
+
+            // --- ROUES (Jantes détaillées) ---
+            const wPos = [[1.05, 0, 1.5], [-1.05, 0, 1.5], [1.05, 0, -1.5], [-1.05, 0, -1.5]];
+            wPos.forEach(pos => {
+                const wheelGroup = new THREE.Group();
+                // Pneu
+                const tire = new THREE.Mesh(new THREE.CylinderGeometry(0.4, 0.4, 0.35, 24), new THREE.MeshStandardMaterial({color: 0x111111}));
+                tire.rotation.z = Math.PI/2;
+                // Jante (Cercle argenté au milieu)
+                const rim = new THREE.Mesh(new THREE.CylinderGeometry(0.25, 0.25, 0.36, 16), rimMat);
+                rim.rotation.z = Math.PI/2;
+                
+                wheelGroup.add(tire, rim);
+                wheelGroup.position.set(...pos);
+                wheels.push(wheelGroup);
+                car.add(wheelGroup);
+            });
+        }
+
         function createSmoke(x, y, z, color, size = 0.2) {
-            const p = new THREE.Mesh(new THREE.SphereGeometry(size, 6, 6), new THREE.MeshBasicMaterial({color: color, transparent: true, opacity: 0.6}));
+            const p = new THREE.Mesh(
+                new THREE.BoxGeometry(size, size, size), 
+                new THREE.MeshBasicMaterial({color: color, transparent: true, opacity: 0.6})
+            );
+            // On positionne la fumée par rapport au monde, pas à la voiture qui bouge
             const wp = new THREE.Vector3(x, y, z).applyMatrix4(car.matrixWorld);
-            p.position.copy(wp); scene.add(p);
+            // On annule le mouvement du monde pour que la fumée reste sur place
+            wp.x -= worldGroup.position.x;
+            wp.z -= worldGroup.position.z;
+            
+            p.position.copy(wp);
+            worldGroup.add(p); // La fumée fait partie du monde qui défile
             particles.push({ mesh: p, life: 1.0 });
         }
 
@@ -174,14 +323,46 @@
         };
         window.onkeyup = (e) => keys[e.code] = false;
 
+        function updateRoad() {
+            // Le monde avance vers nous (Z positif), donc les tuiles partent en Z positif.
+            // Si une tuile dépasse la caméra (Z > 200), on la remet tout au fond.
+            
+            // La position Z globale du world augmente quand on avance.
+            // On vérifie la position locale des tuiles.
+            
+            // LOGIQUE SIMPLE : 
+            // On calcule la position absolue de chaque tuile par rapport à la voiture.
+            // Si une tuile est trop loin derrière (z > TILE_LENGTH), on la bouge devant la plus lointaine.
+
+            // Trions les tuiles par leur position Z réelle dans la scène
+            roadTiles.sort((a, b) => a.position.z - b.position.z);
+            
+            const firstTile = roadTiles[roadTiles.length - 1]; // Celle le plus proche/derrière nous (Z le plus grand)
+            const lastTile = roadTiles[0]; // Celle le plus loin devant (Z le plus petit)
+
+            // Position du monde
+            const worldZ = worldGroup.position.z;
+
+            // Si la tuile la plus proche est passée derrière la caméra
+            // (Position de la tuile + Position du monde) > TILE_LENGTH
+            if ((firstTile.position.z + worldZ) > TILE_LENGTH) {
+                // On la déplace devant la dernière
+                firstTile.position.z = lastTile.position.z - TILE_LENGTH;
+            }
+        }
+
         function animate() {
             requestAnimationFrame(animate);
+
+            // --- PHYSIQUE ---
             let accel = keys['ArrowUp'] || keys['KeyW'] || keys['KeyZ'];
             let brake = keys['ArrowDown'] || keys['KeyS'];
 
             if(accel) { 
                 if(speed < MAX_SPEED_FWD) speed += ACCEL; 
-                createSmoke(0.5, -0.2, 2.4, 0xaaaaaa, 0.15); createSmoke(-0.5, -0.2, 2.4, 0xaaaaaa, 0.15);
+                // Fumée échappement
+                createSmoke(0.45, 0.15, 2.6, 0x555555, 0.1);
+                createSmoke(-0.45, 0.15, 2.6, 0x555555, 0.1);
             } 
             else if(brake) { if(speed > -0.5) speed -= ACCEL * 2; } 
             else { speed *= (1 - FRICTION); }
@@ -190,32 +371,61 @@
             if(keys['ArrowLeft'] || keys['KeyA']) steer = STEER_SPEED;
             if(keys['ArrowRight'] || keys['KeyD']) steer = -STEER_SPEED;
 
+            // Drift et direction
             angle += steer * (speed * 0.8 + 0.2); 
             driftAngle += (angle - driftAngle) * (accel ? 0.15 : 0.08);
             car.rotation.y = driftAngle;
-            worldGroup.position.z += Math.cos(angle) * speed * 10;
-            worldGroup.position.x += Math.sin(angle) * speed * 10;
 
-            if(Math.abs(angle - driftAngle) > 0.06 && Math.abs(speed) > 0.4) {
-                createSmoke(1.1, -0.5, 1.7, 0x222222, 0.25); createSmoke(-1.1, -0.5, 1.7, 0x222222, 0.25);
+            // Déplacement du Monde (Le monde bouge à l'inverse de la voiture)
+            const speedX = Math.sin(angle) * speed * 15;
+            const speedZ = Math.cos(angle) * speed * 15;
+
+            worldGroup.position.z += speedZ;
+            
+            // --- GESTION DES LIMITES LATÉRALES (SOLIDITÉ) ---
+            // La route fait ROAD_WIDTH (30) de large. 
+            // La voiture est à X=0 (visuellement).
+            // worldGroup.position.x représente le décalage de la route.
+            // Si worldGroup.position.x est > 13 ou < -13, on touche le bord.
+
+            let nextX = worldGroup.position.x + speedX;
+            const LIMIT = (ROAD_WIDTH / 2) - 2; // ~13
+
+            if (nextX > LIMIT) {
+                worldGroup.position.x = LIMIT; // Bloque le mur
+                if(Math.abs(speed) > 0.2) speed *= 0.9; // Frottement contre le mur
+                // Étincelles/Fumée mur
+                createSmoke(-1.2, 0.5, 0, 0xcccccc, 0.3); 
+            } else if (nextX < -LIMIT) {
+                worldGroup.position.x = -LIMIT; // Bloque le mur
+                if(Math.abs(speed) > 0.2) speed *= 0.9;
+                createSmoke(1.2, 0.5, 0, 0xcccccc, 0.3);
+            } else {
+                worldGroup.position.x = nextX;
             }
 
-            obstacles.forEach(obs => {
-                const wp = new THREE.Vector3(); obs.getWorldPosition(wp);
-                if(wp.z > 50) { obs.position.z -= 600; obs.position.x = Math.random() * 40 - 20; }
-            });
+            // Génération infinie
+            updateRoad();
 
-            headlightBeams.forEach(l => l.intensity = lightsOn ? 100 : 0);
+            // Effet Drift Fumée
+            if(Math.abs(angle - driftAngle) > 0.06 && Math.abs(speed) > 0.4) {
+                createSmoke(1.05, 0, 1.5, 0xeeeeee, 0.3); 
+                createSmoke(-1.05, 0, 1.5, 0xeeeeee, 0.3);
+            }
+
+            // --- LUMIÈRES ---
+            headlightBeams.forEach(l => l.intensity = lightsOn ? 120 : 0);
             headlightGlows.forEach(l => l.intensity = lightsOn ? 20 : 0);
             meshHeadL.material.color.set(lightsOn ? 0xffffff : 0x333333);
             meshHeadR.material.color.set(lightsOn ? 0xffffff : 0x333333);
 
-            taillightGlows.forEach(l => l.intensity = brake ? 30 : 0);
-            meshRearL.material.color.set(brake ? 0xff0000 : 0x333333);
-            meshRearR.material.color.set(brake ? 0xff0000 : 0x333333);
+            taillightGlows.forEach(l => l.intensity = brake ? 40 : 0);
+            meshRearL.material.color.set(brake ? 0xff0000 : 0x550000);
+            meshRearR.material.color.set(brake ? 0xff0000 : 0x550000);
 
+            // Clignotants
             blinkTimer += 0.05;
-            const b = Math.sin(blinkTimer * 3.14) > 0;
+            const b = Math.sin(blinkTimer * 4) > 0; // Vitesse cligno
             const blinkL = ((blinkMode===1 || blinkMode===3) && b);
             const blinkR = ((blinkMode===2 || blinkMode===3) && b);
 
@@ -224,15 +434,24 @@
             blinkerGlows[0].intensity = blinkL ? 15 : 0;
             blinkerGlows[1].intensity = blinkR ? 15 : 0;
 
+            // Particules
             particles.forEach((p, i) => {
-                p.life -= 0.02; p.mesh.material.opacity = p.life; p.mesh.position.y += 0.02;
-                if(p.life <= 0) { scene.remove(p.mesh); particles.splice(i, 1); }
+                p.life -= 0.03; 
+                p.mesh.material.opacity = p.life; 
+                p.mesh.position.y += 0.05; // La fumée monte
+                p.mesh.scale.multiplyScalar(1.05); // La fumée grandit
+                if(p.life <= 0) { worldGroup.remove(p.mesh); particles.splice(i, 1); }
             });
 
+            // Roues
             wheels.forEach(w => w.rotation.x -= speed * 2.5);
+
+            // HUD
             document.getElementById('speed-val').innerText = Math.round(Math.abs(speed) * 180);
+
             renderer.render(scene, camera);
         }
+
         init();
     </script>
 </body>
